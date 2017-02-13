@@ -67,7 +67,7 @@ class Marker(AbstractMarker):
         return hash(self.uid)
 
 
-class MarkerEnd():
+class MarkerEnd:
     """Markers with designated head or tail end. Used in adjacencies"""
     def __init__(self, marker, head=True):
         self.marker = marker
@@ -108,6 +108,7 @@ class Chromosome(collections.UserList):
     uid_counter = 0
 
     def __init__(self, markers):
+        self.marker_set = set()
         # If it's already a list of markers, skip all this. Otherwise.
         # FIXME Skipping code based on if the first element is a marker is really hackish
         if isinstance(markers, list):
@@ -115,31 +116,62 @@ class Chromosome(collections.UserList):
         else:
         # Otherwise loop through like it is a string
             content = []
-            for s in markers:
-                if s in self.string_d:
-                    i = self.string_d[s]
-                else:
-                    self.string_d[s] = self.uid_counter
-                    i = self.uid_counter
-                    self.uid_counter += 1
+            # If first is telomere, last must be telomere or vice-versa
+            if not (markers[0] == ".") == (markers[-1] == "."):
+                raise ValueError("Linear Chromosome must start and end with telomeres.")
+            for i, s in enumerate(markers):
                 dna = s
                 rev = s.isupper()
                 telomere = s == "."
-                if telomere:
+                if s.lower() in self.marker_set and not telomere:
+                    raise ValueError("Duplicated markers are not allowed. ({0})".format(s.lower()))
+                elif s.lower() in Chromosome.string_d:
+                    uid = Chromosome.string_d[s.lower()]
+                    self.marker_set.add(s.lower())
+                else:
+                    Chromosome.string_d[s.lower()] = Chromosome.uid_counter
+                    self.marker_set.add(s.lower())
+                    uid = Chromosome.uid_counter
+                    Chromosome.uid_counter += 1
+                if telomere and i not in [0, len(markers) - 1]:
+                    raise ValueError("Telomere cannot appear in middle of chromosome.")
+                elif telomere:
                     content.append(Telomere())
                 else:
-                    content.append(Marker(i, dna, rev))
+                    content.append(Marker(uid, dna, rev))
         super().__init__(content)
 
+    @classmethod
+    def clear(cls):
+        """
+        Resets the string_d and uid_counter.
+        :return:
+        """
 
+        cls.string_d = {}
+        cls.uid_counter = 0
 
 
 class Genome(collections.UserList):
     """The abstraction of a genome in DCJ model, a set of chromosomes"""
     # List of Chromosomes
     def __init__(self, *args):
+        for c in args:
+            if not isinstance(c, Chromosome):
+                raise TypeError("Argument list passed to Genome constructor must be Chromosome class instance")
+
+        if len(args) > 1:
+            duplicated_markers = set.intersection(*[c.marker_set for c in args])
+        else:
+            duplicated_markers = None
+
+        if duplicated_markers:
+            raise ValueError("Duplicated markers found across chromosomes. ({0})".format(duplicated_markers))
         super().__init__(args)
 
+    # Must retain information about markers between chromosomes
+    # Validate that arguments passed in are in fact chromosomes
+    # Validate that the markerset in each chromo
     # def __repr__(self):
     #     return str(self.content)
 
@@ -173,10 +205,11 @@ class AdjacencyGraph:
         # Create Adjacency lists
 
         # Finding Common Elements
-        #FIXME: . does not belong in the unique marker set, should be in common?
         marker_set_a = set(itertools.chain.from_iterable(A))
         marker_set_b = set(itertools.chain.from_iterable(B))
         self.commonMarkers = marker_set_a.intersection(marker_set_b)
+        if Telomere() in self.commonMarkers:
+            self.commonMarkers.remove(Telomere())
         marker_set_a = marker_set_a.difference(self.commonMarkers)
         marker_set_b = marker_set_b.difference(self.commonMarkers)
 
@@ -187,30 +220,40 @@ class AdjacencyGraph:
         # Label is a list of markers NOT endmarkers
 
         # Created Adjacencies for Genomes A and B
+        # FIXME: Does not work for circular genomes
         adjacencies = [self.adjA, self.adjB]
         reference_A = {MarkerEnd(Telomere(), head=True): None}
         reference_B = {MarkerEnd(Telomere(), head=True): None}
         references = [reference_A, reference_B]
         for i, genome in enumerate([A, B]):
+            adjacency_length = 0
             for chromosome in genome:
                 index = 0
                 adj_index = 0
                 current_marker = chromosome[index]
-                while index < len(chromosome) - 1:
+                chromosome_markers = set([x for x in chromosome])
+                adjacency_length += len(self.commonMarkers.intersection(chromosome_markers))
+                if chromosome[0] == Telomere():
+                    adjacency_length += 1
+                while len(adjacencies[i]) < adjacency_length:
                     label = []
 
-                    # Fill first adjancy postion
+                    # Fill first adjacency position
                     if current_marker == Telomere():
                         adj[0] = MarkerEnd(Telomere(), head=True)
                     else:
                         adj[0] = MarkerEnd(current_marker, head=not current_marker.reverse)
 
                     # While loop to add to label
-                    next_marker = chromosome[index + 1]
+                    next_marker = chromosome[0] if index >= len(chromosome) - 1 else chromosome[index+1]
                     while next_marker not in self.commonMarkers:
+                        # Fixes linear chromosomes
+                        if next_marker == Telomere():
+                            break
                         label.append(next_marker)
                         index += 1
-                        next_marker = chromosome[index + 1]
+                        # Circular genome, must wrap around
+                        next_marker = chromosome[0] if index >= len(chromosome) - 1 else chromosome[index + 1]
 
                     # fill second adjacency position
                     if next_marker == Telomere():
@@ -219,68 +262,96 @@ class AdjacencyGraph:
                         adj[1] = MarkerEnd(next_marker, head=next_marker.reverse)
                     adjacencies[i].append(Adjacency(left_end_marker=adj[0], right_end_marker=adj[1], label=label))
 
-                    # Create the reference for A and B
+                    # Create reference matrix for A and B
                     if adj[0].marker != Telomere():
-                        references[i][adj[0]] = adj_index
+                        references[i][adj[0]] = len(adjacencies[i]) - 1
                     if adj[1].marker != Telomere():
-                        references[i][adj[1]] = adj_index
+                        references[i][adj[1]] = len(adjacencies[i]) - 1
 
                     current_marker = next_marker
                     index += 1
                     adj_index += 1
 
-
+        # print("self.adjA: ", self.adjA)
+        # print("self.adjB: ", self.adjB)
         # Traverse the graph
-        to_visitA_index = set(range(len(self.adjA)))
-        to_visitB_index = set(range(len(self.adjB)))
-        visitedA_index = set()
-        visitedB_index = set()
+        to_visit_a_index = set(range(len(self.adjA)))
+        to_visit_b_index = set(range(len(self.adjB)))
+        visited_a_index = set()
+        visited_b_index = set()
 
         cycles = 0
         ab_paths = 0
+        a_runs = 0
+        on_a_run = False
+        b_runs = 0
+        on_b_run = False
 
-        while to_visitA_index:
-            a_side = True
-            current_adj_index = to_visitA_index.pop()
-            visitedA_index.add(current_adj_index)
+        while to_visit_a_index:
+            current_adj_index = to_visit_a_index.pop()
+            visited_a_index.add(current_adj_index)
 
             left_marker = self.adjA[current_adj_index].left_end_marker
             right_marker = self.adjA[current_adj_index].right_end_marker
 
+            # Check label for A_run
+            if self.adjA[current_adj_index].label:
+                a_runs += 1
+                on_a_run = True
+
             # Checks for AB paths
-            paths_end_on_A = [True, True]
+            paths_end_on_a = [True, True]
             for i, current_marker in enumerate([left_marker, right_marker]):
-                next_adj_index = reference_A[current_marker]
-                if next_adj_index in visitedB_index:
+                a_side = True
+                next_adj_index = reference_B[current_marker]
+                if next_adj_index in visited_b_index:
                     # If cycle on left_marker, no need to check right marker
                     continue
                 while next_adj_index is not None:
                     current_adj_index = next_adj_index
                     a_side = not a_side
-
                     adj_side = self.adjA if a_side else self.adjB
-                    reference_side = reference_A if a_side else reference_B
+                    current_adj = adj_side[current_adj_index]
+                    reference_side = reference_B if a_side else reference_A
 
-                    visitedA_index.add(current_adj_index) if a_side else visitedB_index.add(current_adj_index)
-                    to_visitA_index.remove(current_adj_index) if a_side else to_visitB_index.remove(current_adj_index)
+                    visited_a_index.add(current_adj_index) if a_side else visited_b_index.add(current_adj_index)
+                    to_visit_a_index.remove(current_adj_index) if a_side else to_visit_b_index.remove(current_adj_index)
+
+                    # Check label, and update runs
+                    if current_adj.label:
+                        if not a_side and on_a_run:
+                            on_b_run = True
+                            on_a_run = False
+                            b_runs += 1
+                        elif not a_side and not on_b_run:
+                            on_b_run = True
+                            b_runs += 1
+
+                        elif a_side and on_b_run:
+                            on_a_run = True
+                            on_b_run = False
+                            a_runs += 1
+                        elif a_side and not on_a_run:
+                            on_a_run = True
+                            a_runs += 1
 
 
                     # Switch markers
-                    if current_marker != adj_side[current_adj_index].left_end_marker:
-                        current_marker = adj_side[current_adj_index].left_end_marker
-                    else:
-                        current_marker = adj_side[current_adj_index].right_end_marker
 
+                    if current_marker != current_adj.left_end_marker:
+                        current_marker = current_adj.left_end_marker
+                    else:
+                        current_marker = current_adj.right_end_marker
 
                     # Find next location
                     next_adj_index = reference_side[current_marker]
 
-
                     if next_adj_index is None:
                         # Path ends
-                        paths_end_on_A[i] = a_side
+                        paths_end_on_a[i] = a_side
                         break
-                    elif (a_side and next_adj_index in visitedB_index) or (not a_side and next_adj_index in visitedA_index):
+                    elif (a_side and next_adj_index in visited_b_index)\
+                            or (not a_side and next_adj_index in visited_a_index):
                         # cycle
                         cycles += 1
                         break
@@ -289,11 +360,17 @@ class AdjacencyGraph:
                         pass
 
             # AB_path
-            if paths_end_on_A[0] != paths_end_on_A[1]:
+            if paths_end_on_a[0] != paths_end_on_a[1]:
                 ab_paths += 1
 
-#
-#
+        self.cycles = cycles
+        self.ab_paths = ab_paths
+        self.a_runs = a_runs
+        self.b_runs = b_runs
+        self.run_potential = a_runs + b_runs
+        self.indel_potential = (self.run_potential + 1) // 2 + ((self.run_potential // 2) % 2) if self.run_potential > 0 else 0
+
+
 # def dcj_pilon_changes(f):
 #     # Convention used for marker UID
 #     #  common -> x%3 = 0
@@ -332,17 +409,60 @@ class AdjacencyGraph:
 #     return Chromosome(genome_A), Chromosome(genome_B)
 
 
-
-def calculate_distance(A, B):
+def calculate_distance(A, B, method="dcj"):
     """Calculate the DCJ distance between genome A and B"""
+    try:
+        ["dcj", "indel"].index(method)
+    except ValueError:
+        print('method must be "dcj"(default) or "indel')
 
+    # DCJ distance
+    # DCJ(A, B) = |G| - c - b/2
+    # Common markers in formula excludes telomeres
+    # Clear Dictionary for creating dictionaries
+    Chromosome.clear()
+    ag = AdjacencyGraph(A, B)
+    dcj_distance = len(ag.commonMarkers) - ag.cycles - ag.ab_paths / 2
+    dcj_indel_distance = dcj_distance + ag.indel_potential
+
+    if method == "indel":
+        return dcj_indel_distance
+    return dcj_distance
+
+
+def validate_genome(genome):
+    """
+    Validates the form of the genome. Acceptable forms are
+
+
+    [".abcdef.", ".skjkjfd."]
+    :param genome:
+    :return:
+    """
+
+
+    #Restraints, no duplicated markers within one genome.
+    #Check Genome is a listsa
+
+    print(Genome(*[Chromosome(c) for c in genome]))
+
+
+
+    # If starts with telomere, must end with telomere
+    #[".abcde.", "rtskli"]
 
 if __name__ == '__main__':
-    a = Chromosome(".acb.")
-    b = Chromosome(".ab.")
-    A = Genome(a)
-    B = Genome(b)
-    res = AdjacencyGraph(A, B)
-    print(res.adjA)
-    print(res.adjB)
+    # b = Genome(Chromosome("ab"), Chromosome(".cd."), Chromosome(".e."), Chromosome("fg"))
+    # a = Genome(Chromosome(".acD."), Chromosome("be"), Chromosome(".fg."))
+    a = ["aa"]
+    # res = AdjacencyGraph(a, b)
+    # print(res.ab_paths)
+    # print(res.commonMarkers)
+    # print(res.cycles)
+    # print(calculate_distance(a, b, method="dcj"))
+    # A = Chromosome(".ab.")
+    # markers = set([x for x in A])
+    # print(markers)
+    validate_genome(a)
+
 
