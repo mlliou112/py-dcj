@@ -1,5 +1,5 @@
 import unittest
-from dcj.main import Telomere, Marker, Genome, Chromosome, calculate_distance, validate_genome
+from dcj.main import Telomere, Marker, Genome, Chromosome, calculate_distance, transform_genome
 
 
 class TestMarkers(unittest.TestCase):
@@ -68,22 +68,29 @@ class TestAdjacencyGraphCircular(unittest.TestCase):
 
 class TestValidateGenome(unittest.TestCase):
     def test_duplicated_markers(self):
-        self.assertRaises(ValueError, validate_genome, ["aa"])
+        self.assertRaises(ValueError, transform_genome, ["aa"])
 
     def test_duplicated_marker_reversed(self):
-        self.assertRaises(ValueError, validate_genome, ["Aa"])
+        self.assertRaises(ValueError, transform_genome, ["Aa"])
 
     def test_duplicated_marker_between_chromosomes(self):
-        self.assertRaises(ValueError, validate_genome, ["abcde", ".fghiC."])
+        self.assertRaises(ValueError, transform_genome, ["abcde", ".fghiC."])
 
     def test_missing_telomere(self):
-        self.assertRaises(ValueError, validate_genome, [".abcd"])
+        self.assertRaises(ValueError, transform_genome, [".abcd"])
+
+    def test_missing_telomere(self):
+        self.assertRaises(ValueError, transform_genome, ["abcd."])
 
     def test_rogue_telomere(self):
-        self.assertRaises(ValueError, validate_genome, ["abc.de"])
+        self.assertRaises(ValueError, transform_genome, [".abc.de."])
 
     def test_genome_without_chromosomes(self):
-        self.assertRaises(TypeError, validate_genome, "abcde", ".fg.")
+        self.assertRaises(TypeError, transform_genome, "abcde", ".fg.")
+
+    def test_chromosome_list_not_markers(self):
+        self.assertRaises(TypeError, transform_genome, [["a", "b", "c"]])
+
 
 if __name__ == '__main__':
     unittest.main()
